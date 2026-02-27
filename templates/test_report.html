@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Relatório Geral – {{ test.title }}{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h4><i class="bi bi-bar-chart"></i> Relatório Geral – {{ test.title }}</h4>
+  <a href="{{ url_for('tests_list') }}" class="btn btn-sm btn-outline-secondary">← Provas</a>
+</div>
+
+{% if report_data %}
+<div class="row g-3 mb-4">
+  <div class="col-md-4">
+    <div class="card text-center">
+      <div class="card-body">
+        <div class="fs-1 fw-bold text-primary">{{ report_data|length }}</div>
+        <div class="text-muted">Respondentes</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card text-center">
+      <div class="card-body">
+        {% set avg = (report_data|selectattr('total','gt',0)|map(attribute='correct')|sum) / (report_data|selectattr('total','gt',0)|list|length) if report_data|selectattr('total','gt',0)|list|length > 0 else 0 %}
+        <div class="fs-1 fw-bold text-success">
+          {% set totals = report_data|selectattr('total','gt',0)|list %}
+          {% if totals %}
+            {{ "%.0f"|format((totals|map(attribute='correct')|sum / totals|map(attribute='total')|sum) * 100) }}%
+          {% else %}—{% endif %}
+        </div>
+        <div class="text-muted">Média de Acertos</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card text-center">
+      <div class="card-body">
+        <div class="fs-1 fw-bold text-secondary">{{ test.questions|length }}</div>
+        <div class="text-muted">Perguntas</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-hover mb-0">
+      <thead class="table-light">
+        <tr><th>#</th><th>Nome</th><th>Observação</th><th>Acertos</th><th>Nota</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for row in report_data %}
+        <tr>
+          <td class="text-muted">{{ loop.index }}</td>
+          <td>{{ row.scan.respondent_name }}</td>
+          <td>{{ row.scan.observation or '—' }}</td>
+          <td>{{ row.correct }} / {{ row.total }}</td>
+          <td>
+            {% if row.total > 0 %}
+              <span class="badge {% if row.correct/row.total >= 0.7 %}bg-success{% elif row.correct/row.total >= 0.5 %}bg-warning text-dark{% else %}bg-danger{% endif %}">
+                {{ "%.0f"|format(row.correct/row.total*100) }}%
+              </span>
+            {% else %}—{% endif %}
+          </td>
+          <td>
+            <a href="{{ url_for('scan_report', tid=test.id, sid=row.scan.id) }}" class="btn btn-sm btn-outline-info"><i class="bi bi-eye"></i></a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% else %}
+<div class="alert alert-info">Nenhum scan registrado para esta prova ainda. <a href="{{ url_for('scan_new', tid=test.id) }}">Registrar primeiro scan</a></div>
+{% endif %}
+{% endblock %}

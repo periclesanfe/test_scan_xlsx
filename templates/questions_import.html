@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Importar Perguntas – QuizScan{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-md-7">
+    <div class="card">
+      <div class="card-header bg-white fw-semibold"><i class="bi bi-upload"></i> Importar Perguntas via XLSX</div>
+      <div class="card-body">
+        <p>O arquivo deve conter as colunas (na primeira linha):</p>
+        <table class="table table-bordered table-sm mb-3">
+          <thead class="table-light"><tr><th>Coluna</th><th>Descrição</th></tr></thead>
+          <tbody>
+            <tr><td><code>text</code> ou <code>pergunta</code></td><td>Texto da pergunta</td></tr>
+            <tr><td><code>answer_type</code> ou <code>tipo</code></td><td><code>yes_no</code>, <code>likert</code> ou <code>custom</code></td></tr>
+            <tr><td><code>correct_answer</code> ou <code>resposta_correta</code></td><td>Resposta correta (opcional)</td></tr>
+            <tr><td><code>custom_options</code> ou <code>opcoes</code></td><td>Opções separadas por vírgula (apenas para tipo custom)</td></tr>
+          </tbody>
+        </table>
+        <form method="post" enctype="multipart/form-data">
+          <div class="mb-3">
+            <input type="file" class="form-control" name="file" accept=".xlsx,.xls" required>
+          </div>
+          <div class="d-flex gap-2">
+            <button type="submit" class="btn btn-primary"><i class="bi bi-upload"></i> Importar</button>
+            <a href="{{ url_for('questions_list') }}" class="btn btn-outline-secondary">Cancelar</a>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Provas – QuizScan{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h4><i class="bi bi-file-earmark-text"></i> Provas</h4>
+  <a href="{{ url_for('test_new') }}" class="btn btn-success btn-sm"><i class="bi bi-plus"></i> Nova Prova</a>
+</div>
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-hover mb-0">
+      <thead class="table-light">
+        <tr><th>#</th><th>Título</th><th>Perguntas</th><th>Scans</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for t in tests %}
+        <tr>
+          <td class="text-muted">{{ loop.index }}</td>
+          <td>{{ t.title }}</td>
+          <td>{{ t.questions|length }}</td>
+          <td>{{ t.scans|length }}</td>
+          <td class="text-end">
+            <a href="{{ url_for('test_pdf', tid=t.id) }}" class="btn btn-sm btn-outline-secondary" title="PDF"><i class="bi bi-printer"></i></a>
+            <a href="{{ url_for('scans_list', tid=t.id) }}" class="btn btn-sm btn-outline-info" title="Scans"><i class="bi bi-upc-scan"></i></a>
+            <a href="{{ url_for('test_report', tid=t.id) }}" class="btn btn-sm btn-outline-dark" title="Relatório"><i class="bi bi-bar-chart"></i></a>
+            <a href="{{ url_for('test_edit', tid=t.id) }}" class="btn btn-sm btn-outline-secondary" title="Editar"><i class="bi bi-pencil"></i></a>
+            <form method="post" action="{{ url_for('test_delete', tid=t.id) }}" class="d-inline" onsubmit="return confirm('Excluir esta prova?')">
+              <button class="btn btn-sm btn-outline-danger" title="Excluir"><i class="bi bi-trash"></i></button>
+            </form>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="text-center text-muted">Nenhuma prova criada.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
