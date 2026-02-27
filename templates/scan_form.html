@@ -23,7 +23,21 @@
             <div class="col-12">
               <label class="form-label fw-semibold" for="scan_image">Foto / Scan da Prova <span class="text-muted small">(opcional – PNG, JPG, etc.)</span></label>
               <input id="scan_image" type="file" class="form-control" name="image" accept="image/*,.pdf">
-              <div class="form-text">Se enviada, o sistema tentará detectar automaticamente as marcações via OMR. Você pode também preencher manualmente abaixo.</div>
+              <div id="scan_preview_wrap" class="mt-3 d-none">
+                <div class="small text-muted mb-1">Pré-visualização</div>
+                <img id="scan_preview_img" class="img-fluid rounded border d-none" alt="Pré-visualização do scan">
+                <iframe id="scan_preview_pdf" class="w-100 rounded border d-none" title="Pré-visualização do PDF" style="height: 420px;"></iframe>
+              </div>
+              <div class="d-flex flex-wrap gap-2 mt-2">
+                <button id="btn_scan_analyze" type="button" class="btn btn-outline-primary btn-sm">
+                  <i class="bi bi-magic"></i> Analisar scan
+                </button>
+                <button id="btn_scan_retry" type="button" class="btn btn-outline-secondary btn-sm d-none">
+                  <i class="bi bi-arrow-repeat"></i> Refazer scan
+                </button>
+              </div>
+              <div id="scan_status" class="alert alert-secondary mt-2 mb-0 py-2 d-none" role="status"></div>
+              <div class="form-text">Ao inserir um arquivo, o sistema tenta preencher automaticamente nome, observação e respostas. Revise antes de registrar.</div>
             </div>
           </div>
 
@@ -52,4 +66,135 @@
     </div>
   </div>
 </div>
+{% endblock %}
+{% block scripts %}
+<script>
+(() => {
+  const fileInput = document.getElementById("scan_image");
+  const nameInput = document.getElementById("respondent_name");
+  const observationInput = document.getElementById("observation");
+  const analyzeBtn = document.getElementById("btn_scan_analyze");
+  const retryBtn = document.getElementById("btn_scan_retry");
+  const statusBox = document.getElementById("scan_status");
+  const previewWrap = document.getElementById("scan_preview_wrap");
+  const previewImg = document.getElementById("scan_preview_img");
+  const previewPdf = document.getElementById("scan_preview_pdf");
+  const csrfTokenInput = document.querySelector('input[name="csrf_token"]');
+  const analyzeUrl = "{{ url_for('scan_analyze', tid=test.id) }}";
+  let previewUrl = null;
+
+  function setStatus(kind, message) {
+    statusBox.classList.remove("d-none", "alert-secondary", "alert-success", "alert-warning", "alert-danger");
+    if (kind === "success") statusBox.classList.add("alert-success");
+    else if (kind === "partial") statusBox.classList.add("alert-warning");
+    else if (kind === "failed") statusBox.classList.add("alert-danger");
+    else statusBox.classList.add("alert-secondary");
+    statusBox.textContent = message;
+  }
+
+  function setLoading(isLoading) {
+    analyzeBtn.disabled = isLoading;
+    retryBtn.disabled = isLoading;
+    if (isLoading) {
+      setStatus("info", "Analisando arquivo...");
+    }
+  }
+
+  function clearPreview() {
+    if (previewUrl) {
+      URL.revokeObjectURL(previewUrl);
+      previewUrl = null;
+    }
+    previewImg.classList.add("d-none");
+    previewPdf.classList.add("d-none");
+    previewImg.removeAttribute("src");
+    previewPdf.removeAttribute("src");
+    previewWrap.classList.add("d-none");
+  }
+
+  function updatePreview(file) {
+    clearPreview();
+    if (!file) return;
+
+    previewUrl = URL.createObjectURL(file);
+    previewWrap.classList.remove("d-none");
+
+    const type = (file.type || "").toLowerCase();
+    const isPdf = type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+    if (isPdf) {
+      previewPdf.src = previewUrl;
+      previewPdf.classList.remove("d-none");
+      return;
+    }
+
+    previewImg.src = previewUrl;
+    previewImg.classList.remove("d-none");
+  }
+
+  function applyAnswers(answers) {
+    Object.entries(answers || {}).forEach(([questionId, value]) => {
+      const input = document.querySelector(`input[name="answer_${questionId}"][value="${CSS.escape(value)}"]`);
+      if (input) input.checked = true;
+    });
+  }
+
+  async function analyzeCurrentFile() {
+    const file = fileInput.files && fileInput.files[0];
+    if (!file) {
+      setStatus("failed", "Selecione um arquivo antes de analisar.");
+      return;
+    }
+
+    setLoading(true);
+    const formData = new FormData();
+    formData.append("image", file);
+    if (csrfTokenInput && csrfTokenInput.value) {
+      formData.append("csrf_token", csrfTokenInput.value);
+    }
+
+    try {
+      const resp = await fetch(analyzeUrl, {
+        method: "POST",
+        body: formData,
+      });
+      const data = await resp.json();
+      if (!resp.ok) {
+        setStatus("failed", data.message || "Erro ao analisar o arquivo.");
+        retryBtn.classList.remove("d-none");
+        return;
+      }
+
+      if (data.respondent_name) nameInput.value = data.respondent_name;
+      if (data.observation) observationInput.value = data.observation;
+      applyAnswers(data.answers);
+
+      const summary = data.summary || {};
+      const details = `Respostas detectadas: ${summary.questions_detected || 0}/${summary.questions_total || 0}. ` +
+        `Nome: ${summary.name_detected ? "ok" : "não detectado"}. ` +
+        `Observação: ${summary.observation_detected ? "ok" : "não detectada"}.`;
+      setStatus(data.status || "partial", `${data.message || "Análise concluída."} ${details}`);
+      retryBtn.classList.remove("d-none");
+    } catch (error) {
+      setStatus("failed", "Falha de comunicação durante a análise.");
+      retryBtn.classList.remove("d-none");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  fileInput.addEventListener("change", () => {
+    retryBtn.classList.add("d-none");
+    if (fileInput.files && fileInput.files[0]) {
+      updatePreview(fileInput.files[0]);
+      analyzeCurrentFile();
+    } else {
+      clearPreview();
+      statusBox.classList.add("d-none");
+    }
+  });
+
+  analyzeBtn.addEventListener("click", analyzeCurrentFile);
+  retryBtn.addEventListener("click", analyzeCurrentFile);
+})();
+</script>
 {% endblock %}

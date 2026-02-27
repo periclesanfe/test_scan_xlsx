@@ -14,6 +14,7 @@ from models import db, Question, Test, TestQuestion, Scan, Response
 from utils import (
     generate_test_pdf,
     process_scan_image,
+    extract_scan_metadata,
     import_questions_from_xlsx,
     import_questions_from_json,
     export_questions_to_xlsx,
@@ -52,6 +53,75 @@ def create_app():
         db.create_all()
 
     # ── Questions ───────────────────────────────────────────────────────────
+
+    @app.context_processor
+    def inject_breadcrumbs():
+        endpoint = request.endpoint
+        view_args = request.view_args or {}
+        crumbs = [("Menu", url_for("index"))]
+
+        def _test_title(tid):
+            t = db.session.get(Test, tid)
+            return t.title if t else f"Prova #{tid}"
+
+        def _scan_name(sid):
+            s = db.session.get(Scan, sid)
+            return s.respondent_name if s else f"Scan #{sid}"
+
+        if endpoint in {"index"}:
+            return {"breadcrumbs": crumbs}
+
+        if endpoint in {
+            "questions_list",
+            "question_new",
+            "question_edit",
+            "questions_import",
+        }:
+            crumbs.append(("Perguntas", url_for("questions_list")))
+            if endpoint == "question_new":
+                crumbs.append(("Nova Pergunta", None))
+            elif endpoint == "question_edit":
+                crumbs.append(("Editar Pergunta", None))
+            elif endpoint == "questions_import":
+                crumbs.append(("Importar XLSX", None))
+            return {"breadcrumbs": crumbs}
+
+        if endpoint in {
+            "tests_list",
+            "test_new",
+            "test_edit",
+            "scans_list",
+            "scan_new",
+            "scan_report",
+            "test_report",
+        }:
+            crumbs.append(("Provas", url_for("tests_list")))
+            if endpoint in {"test_new"}:
+                crumbs.append(("Nova Prova", None))
+                return {"breadcrumbs": crumbs}
+            if endpoint in {"test_edit"}:
+                crumbs.append(("Editar Prova", None))
+                return {"breadcrumbs": crumbs}
+
+            tid = view_args.get("tid")
+            if tid is not None:
+                crumbs.append((_test_title(tid), url_for("scans_list", tid=tid)))
+
+            if endpoint in {"scans_list"}:
+                crumbs.append(("Scans", None))
+            elif endpoint in {"scan_new"}:
+                crumbs.append(("Scans", url_for("scans_list", tid=tid)))
+                crumbs.append(("Novo Scan", None))
+            elif endpoint in {"scan_report"}:
+                crumbs.append(("Scans", url_for("scans_list", tid=tid)))
+                sid = view_args.get("sid")
+                if sid is not None:
+                    crumbs.append((_scan_name(sid), None))
+            elif endpoint in {"test_report"}:
+                crumbs.append(("Relatório Geral", None))
+            return {"breadcrumbs": crumbs}
+
+        return {"breadcrumbs": crumbs}
 
     @app.route("/")
     def index():
@@ -95,7 +165,7 @@ def create_app():
 
     @app.route("/questions/<int:qid>/edit", methods=["GET", "POST"])
     def question_edit(qid):
-        q = Question.query.get_or_404(qid)
+        q = db.get_or_404(Question, qid)
         if request.method == "POST":
             text = request.form["text"].strip()
             answer_type = request.form["answer_type"].strip()
@@ -126,7 +196,7 @@ def create_app():
 
     @app.route("/questions/<int:qid>/delete", methods=["POST"])
     def question_delete(qid):
-        q = Question.query.get_or_404(qid)
+        q = db.get_or_404(Question, qid)
         db.session.delete(q)
         db.session.commit()
         flash("Pergunta excluída.", "info")
@@ -249,7 +319,7 @@ def create_app():
 
     @app.route("/tests/<int:tid>/edit", methods=["GET", "POST"])
     def test_edit(tid):
-        t = Test.query.get_or_404(tid)
+        t = db.get_or_404(Test, tid)
         questions = Question.query.order_by(Question.created_at).all()
         if request.method == "POST":
             title = request.form["title"].strip()
@@ -269,7 +339,7 @@ def create_app():
 
     @app.route("/tests/<int:tid>/delete", methods=["POST"])
     def test_delete(tid):
-        t = Test.query.get_or_404(tid)
+        t = db.get_or_404(Test, tid)
         db.session.delete(t)
         db.session.commit()
         flash("Prova excluída.", "info")
@@ -277,7 +347,7 @@ def create_app():
 
     @app.route("/tests/<int:tid>/pdf")
     def test_pdf(tid):
-        t = Test.query.get_or_404(tid)
+        t = db.get_or_404(Test, tid)
         out = os.path.join(UPLOAD_FOLDER, f"test_{tid}_{uuid.uuid4().hex}.pdf")
         try:
             generate_test_pdf(t, out)
@@ -291,12 +361,94 @@ def create_app():
 
     @app.route("/tests/<int:tid>/scans")
     def scans_list(tid):
-        t = Test.query.get_or_404(tid)
+        t = db.get_or_404(Test, tid)
         return render_template("scans.html", test=t)
+
+    @app.route("/tests/<int:tid>/scans/analyze", methods=["POST"])
+    def scan_analyze(tid):
+        t = db.get_or_404(Test, tid)
+        img_file = request.files.get("image")
+        if not img_file or not img_file.filename:
+            return {"status": "failed", "message": "Selecione um arquivo para analisar."}, 400
+        if not _allowed(img_file.filename, ALLOWED_SCAN_EXTENSIONS):
+            return {"status": "failed", "message": "Formato de arquivo inválido para análise."}, 400
+
+        safe = secure_filename(img_file.filename)
+        tmp_filename = f"analyze_{uuid.uuid4().hex}_{safe}"
+        tmp_path = os.path.join(UPLOAD_FOLDER, tmp_filename)
+        img_file.save(tmp_path)
+
+        try:
+            omr_result = process_scan_image(tmp_path, t, with_confidence=True)
+            if isinstance(omr_result, tuple) and len(omr_result) == 2:
+                answers, confidences = omr_result
+            else:
+                app.logger.warning("Retorno inesperado do OMR para %s; aplicando fallback.", safe)
+                answers, confidences = (omr_result or {}), {}
+            metadata = extract_scan_metadata(tmp_path)
+        except Exception:
+            app.logger.exception("Falha na análise automática do scan %s", safe)
+            return {"status": "failed", "message": "Falha ao analisar o arquivo."}, 500
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+
+        valid_answers = {}
+        for tq in t.questions:
+            q = tq.question
+            answer = answers.get(q.id)
+            if answer and answer in q.get_options():
+                valid_answers[str(q.id)] = answer
+
+        response_confidences = {}
+        for qid_str, answer in valid_answers.items():
+            _ = answer
+            confidence = confidences.get(int(qid_str))
+            if confidence is not None:
+                response_confidences[qid_str] = confidence
+
+        total_questions = len(t.questions)
+        answered_count = len(valid_answers)
+        respondent_name = metadata.get("respondent_name") if metadata else None
+        observation = metadata.get("observation") if metadata else None
+        has_name = bool(respondent_name)
+        has_observation = bool(observation)
+
+        if answered_count == total_questions and has_name:
+            status = "success"
+            message = "Leitura concluída com sucesso."
+        elif answered_count > 0 or has_name or has_observation:
+            status = "partial"
+            message = "Leitura parcial concluída. Revise os campos antes de registrar."
+        else:
+            status = "failed"
+            message = "Não foi possível extrair dados automaticamente deste arquivo."
+            metadata_method = metadata.get("method") if metadata else None
+            if metadata_method == "pdf_renderer_unavailable":
+                message = (
+                    "PDF recebido, mas o renderizador de PDF não está disponível para análise. "
+                    "Instale pypdfium2 ou envie imagem (JPG/PNG)."
+                )
+
+        return {
+            "status": status,
+            "message": message,
+            "respondent_name": respondent_name,
+            "observation": observation,
+            "answers": valid_answers,
+            "confidences": response_confidences,
+            "summary": {
+                "questions_total": total_questions,
+                "questions_detected": answered_count,
+                "name_detected": has_name,
+                "observation_detected": has_observation,
+                "metadata_method": metadata.get("method") if metadata else None,
+            },
+        }
 
     @app.route("/tests/<int:tid>/scans/new", methods=["GET", "POST"])
     def scan_new(tid):
-        t = Test.query.get_or_404(tid)
+        t = db.get_or_404(Test, tid)
         if request.method == "POST":
             name = request.form["respondent_name"].strip()
             if not name:
@@ -358,7 +510,7 @@ def create_app():
 
     @app.route("/tests/<int:tid>/scans/<int:sid>/report")
     def scan_report(tid, sid):
-        t = Test.query.get_or_404(tid)
+        t = db.get_or_404(Test, tid)
         scan = Scan.query.filter_by(id=sid, test_id=tid).first_or_404()
         correct, total = scan.calculate_score()
         return render_template("report.html", test=t, scan=scan, correct=correct, total=total)
@@ -377,7 +529,7 @@ def create_app():
 
     @app.route("/tests/<int:tid>/report")
     def test_report(tid):
-        t = Test.query.get_or_404(tid)
+        t = db.get_or_404(Test, tid)
         report_data = []
         for scan in t.scans:
             correct, total = scan.calculate_score()
@@ -386,7 +538,7 @@ def create_app():
 
     @app.route("/tests/<int:tid>/manifest.json")
     def test_manifest_json(tid):
-        t = Test.query.get_or_404(tid)
+        t = db.get_or_404(Test, tid)
         template = build_omr_template(t)
         manifest = {
             "version": "1.1",
@@ -415,7 +567,7 @@ def create_app():
 
     @app.route("/tests/<int:tid>/results.json")
     def test_results_json(tid):
-        t = Test.query.get_or_404(tid)
+        t = db.get_or_404(Test, tid)
         result_rows = []
         for scan in t.scans:
             correct, total = scan.calculate_score()
@@ -456,6 +608,14 @@ def create_app():
         if not safe_name or safe_name != filename:
             return ("Arquivo inválido.", 400)
         return send_from_directory(UPLOAD_FOLDER, safe_name)
+
+    @app.route("/favicon.ico")
+    def favicon():
+        return send_from_directory(
+            os.path.join(app.root_path, "static"),
+            "favicon.svg",
+            mimetype="image/svg+xml",
+        )
 
     def _allowed(filename, allowed):
         return "." in filename and filename.rsplit(".", 1)[1].lower() in allowed

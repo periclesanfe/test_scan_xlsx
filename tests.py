@@ -7,8 +7,10 @@ import tempfile
 
 import pytest
 
+import app as app_module
 from app import create_app
 from models import db as _db, Question, Test, TestQuestion, Scan, Response
+from utils import process_scan_image
 
 
 @pytest.fixture
@@ -287,3 +289,143 @@ def test_results_json_includes_confidence_key(client, app):
     rv = client.get(f"/tests/{tid}/results.json")
     assert rv.status_code == 200
     assert "omr_confidence" in rv.json["scans"][0]
+
+
+def test_scan_analyze_auto_populates_data(client, app, monkeypatch):
+    with app.app_context():
+        q = Question(text="Q Analyze", answer_type="yes_no", correct_answer="Sim")
+        _db.session.add(q)
+        _db.session.flush()
+        t = Test(title="Analyze Test")
+        _db.session.add(t)
+        _db.session.flush()
+        _db.session.add(TestQuestion(test_id=t.id, question_id=q.id, order=0))
+        _db.session.commit()
+        tid = t.id
+        qid = q.id
+
+    monkeypatch.setattr(
+        app_module,
+        "process_scan_image",
+        lambda image_path, test, with_confidence=False: ({qid: "Sim"}, {qid: 0.87}),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "extract_scan_metadata",
+        lambda image_path: {
+            "respondent_name": "Maria",
+            "observation": "Tudo legível",
+            "method": "mock",
+        },
+    )
+
+    rv = client.post(
+        f"/tests/{tid}/scans/analyze",
+        data={"image": (io.BytesIO(b"fake-image"), "scan.jpg")},
+        content_type="multipart/form-data",
+    )
+    assert rv.status_code == 200
+    assert rv.json["status"] in {"success", "partial"}
+    assert rv.json["respondent_name"] == "Maria"
+    assert rv.json["observation"] == "Tudo legível"
+    assert rv.json["answers"][str(qid)] == "Sim"
+
+
+def test_scan_analyze_reports_failed_when_no_data(client, app, monkeypatch):
+    with app.app_context():
+        q = Question(text="Q Analyze Empty", answer_type="yes_no", correct_answer="Sim")
+        _db.session.add(q)
+        _db.session.flush()
+        t = Test(title="Analyze Empty Test")
+        _db.session.add(t)
+        _db.session.flush()
+        _db.session.add(TestQuestion(test_id=t.id, question_id=q.id, order=0))
+        _db.session.commit()
+        tid = t.id
+
+    monkeypatch.setattr(
+        app_module,
+        "process_scan_image",
+        lambda image_path, test, with_confidence=False: ({}, {}),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "extract_scan_metadata",
+        lambda image_path: {
+            "respondent_name": None,
+            "observation": None,
+            "method": "mock",
+        },
+    )
+
+    rv = client.post(
+        f"/tests/{tid}/scans/analyze",
+        data={"image": (io.BytesIO(b"fake-image"), "scan.jpg")},
+        content_type="multipart/form-data",
+    )
+    assert rv.status_code == 200
+    assert rv.json["status"] == "failed"
+
+
+def test_scan_analyze_pdf_does_not_crash(client, app):
+    with app.app_context():
+        q = Question(text="Q Analyze PDF", answer_type="yes_no", correct_answer="Sim")
+        _db.session.add(q)
+        _db.session.flush()
+        t = Test(title="Analyze PDF Test")
+        _db.session.add(t)
+        _db.session.flush()
+        _db.session.add(TestQuestion(test_id=t.id, question_id=q.id, order=0))
+        _db.session.commit()
+        tid = t.id
+
+    rv = client.post(
+        f"/tests/{tid}/scans/analyze",
+        data={"image": (io.BytesIO(b"%PDF-1.4 fake"), "prova_omr.pdf")},
+        content_type="multipart/form-data",
+    )
+    assert rv.status_code == 200
+    assert rv.json["status"] in {"failed", "partial"}
+
+
+def test_process_scan_image_with_confidence_returns_tuple_on_unreadable_file():
+    answers, confidences = process_scan_image("/tmp/arquivo_inexistente.jpg", None, with_confidence=True)
+    assert answers == {}
+    assert confidences == {}
+
+
+def test_scan_analyze_informs_pdf_renderer_missing(client, app, monkeypatch):
+    with app.app_context():
+        q = Question(text="Q Analyze PDF Renderer", answer_type="yes_no", correct_answer="Sim")
+        _db.session.add(q)
+        _db.session.flush()
+        t = Test(title="Analyze PDF Renderer Test")
+        _db.session.add(t)
+        _db.session.flush()
+        _db.session.add(TestQuestion(test_id=t.id, question_id=q.id, order=0))
+        _db.session.commit()
+        tid = t.id
+
+    monkeypatch.setattr(
+        app_module,
+        "process_scan_image",
+        lambda image_path, test, with_confidence=False: ({}, {}),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "extract_scan_metadata",
+        lambda image_path: {
+            "respondent_name": None,
+            "observation": None,
+            "method": "pdf_renderer_unavailable",
+        },
+    )
+
+    rv = client.post(
+        f"/tests/{tid}/scans/analyze",
+        data={"image": (io.BytesIO(b"%PDF-1.4 fake"), "prova_omr.pdf")},
+        content_type="multipart/form-data",
+    )
+    assert rv.status_code == 200
+    assert rv.json["status"] == "failed"
+    assert "PDF recebido" in rv.json["message"]

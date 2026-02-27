@@ -1,5 +1,7 @@
 import io
 import json
+import os
+import re
 
 import cv2
 import numpy as np
@@ -8,8 +10,49 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import mm
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
+from reportlab.pdfbase.pdfmetrics import stringWidth
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, Flowable
 from reportlab.lib.enums import TA_CENTER
+
+
+class BubbleOptionsRow(Flowable):
+    """Draw OMR-friendly bubble options as real circles followed by labels."""
+
+    def __init__(self, options, font_name="Helvetica", font_size=10, left_indent=10):
+        super().__init__()
+        self.options = options
+        self.font_name = font_name
+        self.font_size = font_size
+        self.left_indent = left_indent
+        self.bubble_radius = 2 * mm
+        self.label_gap = 2 * mm
+        self.option_gap = 6 * mm
+        self.height = max((2 * self.bubble_radius) + (0.8 * mm), self.font_size + 2)
+
+    def wrap(self, avail_width, avail_height):
+        self.width = avail_width
+        return avail_width, self.height
+
+    def draw(self):
+        c = self.canv
+        c.saveState()
+        c.setFont(self.font_name, self.font_size)
+        c.setLineWidth(1)
+
+        x = self.left_indent
+        y = self.height / 2.0
+        for opt in self.options:
+            cx = x + self.bubble_radius
+            if cx + self.bubble_radius > self.width:
+                break
+            c.circle(cx, y, self.bubble_radius, stroke=1, fill=0)
+            label_x = cx + self.bubble_radius + self.label_gap
+            label = str(opt)
+            c.drawString(label_x, y - (self.font_size * 0.35), label)
+            label_w = stringWidth(label, self.font_name, self.font_size)
+            x = label_x + label_w + self.option_gap
+
+        c.restoreState()
 
 
 def generate_test_pdf(test, output_path):
@@ -27,7 +70,6 @@ def generate_test_pdf(test, output_path):
     title_style = ParagraphStyle("Title", parent=styles["Heading1"], alignment=TA_CENTER, fontSize=18)
     subtitle_style = ParagraphStyle("Subtitle", parent=styles["Normal"], alignment=TA_CENTER, fontSize=11)
     question_style = ParagraphStyle("Question", parent=styles["Normal"], fontSize=11, spaceAfter=4)
-    option_style = ParagraphStyle("Option", parent=styles["Normal"], fontSize=10, leftIndent=10)
 
     elements = []
 
@@ -69,11 +111,8 @@ def generate_test_pdf(test, output_path):
         q = tq.question
         elements.append(Paragraph(f"<b>{idx}.</b> {q.text}", question_style))
         options = q.get_options()
-        option_row = []
-        for opt in options:
-            option_row.append(f"( ) {opt}")
-        if option_row:
-            elements.append(Paragraph("    " + "     ".join(option_row), option_style))
+        if options:
+            elements.append(BubbleOptionsRow(options))
         elements.append(Spacer(1, 4 * mm))
 
     doc.build(elements, onFirstPage=lambda canvas, doc_ref: _draw_fiducials(canvas, doc_ref, template))
@@ -95,15 +134,84 @@ def _make_qr(data: str) -> io.BytesIO:
 OMR_FILL_THRESHOLD = 0.4
 
 
+def extract_scan_metadata(image_path):
+    """
+    Try to extract respondent metadata (name/observation) from the scan header.
+    OCR is optional; if unavailable, returns empty fields.
+    """
+    img, source_method = _read_scan_image(image_path)
+    if img is None:
+        return {"respondent_name": None, "observation": None, "method": source_method}
+
+    try:
+        import pytesseract
+    except Exception:
+        return {"respondent_name": None, "observation": None, "method": "ocr_unavailable"}
+
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    boosted = cv2.convertScaleAbs(gray, alpha=1.5, beta=0)
+    cleaned = cv2.GaussianBlur(boosted, (3, 3), 0)
+    thresh = cv2.adaptiveThreshold(
+        cleaned, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 11
+    )
+
+    text = ""
+    try:
+        text = pytesseract.image_to_string(thresh, lang="por+eng")
+    except Exception:
+        try:
+            text = pytesseract.image_to_string(thresh, lang="eng")
+        except Exception:
+            return {"respondent_name": None, "observation": None, "method": "ocr_failed"}
+
+    respondent_name = _extract_labeled_text(
+        text,
+        label_patterns=[r"nome", r"name"],
+        stop_patterns=[r"data", r"date", r"observa[çc][aã]o", r"observation"],
+    )
+    observation = _extract_labeled_text(
+        text,
+        label_patterns=[r"observa[çc][aã]o", r"observation"],
+        stop_patterns=[r"nome", r"name", r"data", r"date"],
+    )
+
+    return {
+        "respondent_name": respondent_name,
+        "observation": observation,
+        "method": f"ocr_tesseract_{source_method}",
+    }
+
+
+def _extract_labeled_text(text, label_patterns, stop_patterns):
+    if not text:
+        return None
+
+    label_alt = "|".join(label_patterns)
+    stop_alt = "|".join(stop_patterns)
+    regex = re.compile(
+        rf"(?is)\b(?:{label_alt})\b\s*[:\-]?\s*(.+?)(?=(?:\b(?:{stop_alt})\b\s*[:\-]?)|\n|$)"
+    )
+    match = regex.search(text)
+    if not match:
+        return None
+
+    value = match.group(1)
+    value = value.replace("_", " ").strip(" .;:-\t\r\n")
+    value = re.sub(r"\s+", " ", value).strip()
+    if not value:
+        return None
+    return value
+
+
 def process_scan_image(image_path, test, with_confidence=False):
     """
     Basic OMR: detect filled circles/bubbles in the uploaded scan.
     Returns a dict {question_index (1-based): selected_option_text}.
     Falls back to empty dict if detection is unreliable.
     """
-    img = cv2.imread(image_path)
+    img, _ = _read_scan_image(image_path)
     if img is None:
-        return {}
+        return ({}, {}) if with_confidence else {}
 
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
@@ -165,6 +273,37 @@ def process_scan_image(image_path, test, with_confidence=False):
             results[tq.question_id] = best
             confidences[tq.question_id] = round(float(best_fill), 4)
     return (results, confidences) if with_confidence else results
+
+
+def _read_scan_image(image_path):
+    """Read scan input (image or PDF first page) and return (bgr_image_or_none, method)."""
+    ext = os.path.splitext(image_path)[1].lower()
+    if ext == ".pdf":
+        try:
+            import pypdfium2 as pdfium
+        except Exception:
+            return None, "pdf_renderer_unavailable"
+        try:
+            pdf = pdfium.PdfDocument(image_path)
+            if len(pdf) < 1:
+                return None, "pdf_empty"
+            page = pdf[0]
+            pil_img = page.render(scale=2.0).to_pil()
+            arr = np.array(pil_img)
+            if arr.ndim == 2:
+                bgr = cv2.cvtColor(arr, cv2.COLOR_GRAY2BGR)
+            elif arr.shape[2] == 4:
+                bgr = cv2.cvtColor(arr, cv2.COLOR_RGBA2BGR)
+            else:
+                bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+            return bgr, "pdf_page1_rendered"
+        except Exception:
+            return None, "pdf_render_failed"
+
+    img = cv2.imread(image_path)
+    if img is None:
+        return None, "image_unreadable"
+    return img, "image_loaded"
 
 
 def import_questions_from_xlsx(file_path):
