@@ -14,7 +14,6 @@ from models import db, Question, Test, TestQuestion, Scan, Response
 from utils import (
     generate_test_pdf,
     process_scan_image,
-    extract_scan_metadata,
     import_questions_from_xlsx,
     import_questions_from_json,
     export_questions_to_xlsx,
@@ -385,7 +384,6 @@ def create_app():
             else:
                 app.logger.warning("Retorno inesperado do OMR para %s; aplicando fallback.", safe)
                 answers, confidences = (omr_result or {}), {}
-            metadata = extract_scan_metadata(tmp_path)
         except Exception:
             app.logger.exception("Falha na análise automática do scan %s", safe)
             return {"status": "failed", "message": "Falha ao analisar o arquivo."}, 500
@@ -409,26 +407,18 @@ def create_app():
 
         total_questions = len(t.questions)
         answered_count = len(valid_answers)
-        respondent_name = metadata.get("respondent_name") if metadata else None
-        observation = metadata.get("observation") if metadata else None
-        has_name = bool(respondent_name)
-        has_observation = bool(observation)
+        respondent_name = None
+        observation = None
 
-        if answered_count == total_questions and has_name:
+        if total_questions > 0 and answered_count == total_questions:
             status = "success"
             message = "Leitura concluída com sucesso."
-        elif answered_count > 0 or has_name or has_observation:
+        elif answered_count > 0:
             status = "partial"
-            message = "Leitura parcial concluída. Revise os campos antes de registrar."
+            message = "Leitura parcial concluída. Revise as respostas antes de registrar."
         else:
             status = "failed"
             message = "Não foi possível extrair dados automaticamente deste arquivo."
-            metadata_method = metadata.get("method") if metadata else None
-            if metadata_method == "pdf_renderer_unavailable":
-                message = (
-                    "PDF recebido, mas o renderizador de PDF não está disponível para análise. "
-                    "Instale pypdfium2 ou envie imagem (JPG/PNG)."
-                )
 
         return {
             "status": status,
@@ -440,9 +430,9 @@ def create_app():
             "summary": {
                 "questions_total": total_questions,
                 "questions_detected": answered_count,
-                "name_detected": has_name,
-                "observation_detected": has_observation,
-                "metadata_method": metadata.get("method") if metadata else None,
+                "name_detected": False,
+                "observation_detected": False,
+                "metadata_method": None,
             },
         }
 
@@ -450,10 +440,8 @@ def create_app():
     def scan_new(tid):
         t = db.get_or_404(Test, tid)
         if request.method == "POST":
-            name = request.form["respondent_name"].strip()
-            if not name:
-                flash("Nome do respondente é obrigatório.", "danger")
-                return render_template("scan_form.html", test=t), 400
+            provided_name = request.form.get("respondent_name", "").strip()
+            name = provided_name or f"Scan {uuid.uuid4().hex[:8]}"
             obs = request.form.get("observation", "").strip() or None
             img_filename = None
 

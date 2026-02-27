@@ -13,11 +13,11 @@
 
           <div class="row g-3 mb-4">
             <div class="col-md-6">
-              <label class="form-label fw-semibold" for="respondent_name">Nome do Respondente *</label>
-              <input id="respondent_name" type="text" class="form-control" name="respondent_name" autocomplete="name" required>
+              <label class="form-label fw-semibold" for="respondent_name">Nome do Respondente <span class="text-muted small">(opcional)</span></label>
+              <input id="respondent_name" type="text" class="form-control" name="respondent_name" autocomplete="name">
             </div>
             <div class="col-md-6">
-              <label class="form-label fw-semibold" for="observation">Observação / Descrição</label>
+              <label class="form-label fw-semibold" for="observation">Observação / Descrição <span class="text-muted small">(opcional)</span></label>
               <input id="observation" type="text" class="form-control" name="observation">
             </div>
             <div class="col-12">
@@ -37,7 +37,7 @@
                 </button>
               </div>
               <div id="scan_status" class="alert alert-secondary mt-2 mb-0 py-2 d-none" role="status"></div>
-              <div class="form-text">Ao inserir um arquivo, o sistema tenta preencher automaticamente nome, observação e respostas. Revise antes de registrar.</div>
+              <div class="form-text">Ao inserir um arquivo, o sistema tenta preencher automaticamente as respostas. Revise antes de registrar.</div>
             </div>
           </div>
 
@@ -71,8 +71,6 @@
 <script>
 (() => {
   const fileInput = document.getElementById("scan_image");
-  const nameInput = document.getElementById("respondent_name");
-  const observationInput = document.getElementById("observation");
   const analyzeBtn = document.getElementById("btn_scan_analyze");
   const retryBtn = document.getElementById("btn_scan_retry");
   const statusBox = document.getElementById("scan_status");
@@ -132,6 +130,9 @@
   }
 
   function applyAnswers(answers) {
+    document.querySelectorAll('input[type="radio"][name^="answer_"]').forEach((input) => {
+      input.checked = false;
+    });
     Object.entries(answers || {}).forEach(([questionId, value]) => {
       const input = document.querySelector(`input[name="answer_${questionId}"][value="${CSS.escape(value)}"]`);
       if (input) input.checked = true;
@@ -164,14 +165,10 @@
         return;
       }
 
-      if (data.respondent_name) nameInput.value = data.respondent_name;
-      if (data.observation) observationInput.value = data.observation;
       applyAnswers(data.answers);
 
       const summary = data.summary || {};
-      const details = `Respostas detectadas: ${summary.questions_detected || 0}/${summary.questions_total || 0}. ` +
-        `Nome: ${summary.name_detected ? "ok" : "não detectado"}. ` +
-        `Observação: ${summary.observation_detected ? "ok" : "não detectada"}.`;
+      const details = `Respostas detectadas: ${summary.questions_detected || 0}/${summary.questions_total || 0}.`;
       setStatus(data.status || "partial", `${data.message || "Análise concluída."} ${details}`);
       retryBtn.classList.remove("d-none");
     } catch (error) {

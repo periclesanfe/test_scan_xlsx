@@ -5,12 +5,19 @@ import io
 import os
 import tempfile
 
+import cv2
 import pytest
 
 import app as app_module
 from app import create_app
 from models import db as _db, Question, Test, TestQuestion, Scan, Response
-from utils import process_scan_image
+from utils import (
+    process_scan_image,
+    generate_test_pdf,
+    _answer_region_min_y,
+    _detect_answer_guide_rows,
+    _read_scan_pages,
+)
 
 
 @pytest.fixture
@@ -143,6 +150,27 @@ def test_create_scan(client, app):
     }, follow_redirects=True)
     assert rv.status_code == 200
     assert b"Jo" in rv.data
+
+
+def test_create_scan_without_name_uses_generated_identifier(client, app):
+    with app.app_context():
+        q = Question(text="Q sem nome", answer_type="yes_no", correct_answer="Sim")
+        _db.session.add(q)
+        _db.session.flush()
+        t = Test(title="Prova Sem Nome")
+        _db.session.add(t)
+        _db.session.flush()
+        _db.session.add(TestQuestion(test_id=t.id, question_id=q.id, order=0))
+        _db.session.commit()
+        tid, qid = t.id, q.id
+
+    rv = client.post(
+        f"/tests/{tid}/scans/new",
+        data={f"answer_{qid}": "Sim"},
+        follow_redirects=True,
+    )
+    assert rv.status_code == 200
+    assert b"Scan " in rv.data
 
 
 def test_scan_score(app):
@@ -291,7 +319,7 @@ def test_results_json_includes_confidence_key(client, app):
     assert "omr_confidence" in rv.json["scans"][0]
 
 
-def test_scan_analyze_auto_populates_data(client, app, monkeypatch):
+def test_scan_analyze_auto_populates_answers(client, app, monkeypatch):
     with app.app_context():
         q = Question(text="Q Analyze", answer_type="yes_no", correct_answer="Sim")
         _db.session.add(q)
@@ -309,15 +337,6 @@ def test_scan_analyze_auto_populates_data(client, app, monkeypatch):
         "process_scan_image",
         lambda image_path, test, with_confidence=False: ({qid: "Sim"}, {qid: 0.87}),
     )
-    monkeypatch.setattr(
-        app_module,
-        "extract_scan_metadata",
-        lambda image_path: {
-            "respondent_name": "Maria",
-            "observation": "Tudo legível",
-            "method": "mock",
-        },
-    )
 
     rv = client.post(
         f"/tests/{tid}/scans/analyze",
@@ -325,9 +344,9 @@ def test_scan_analyze_auto_populates_data(client, app, monkeypatch):
         content_type="multipart/form-data",
     )
     assert rv.status_code == 200
-    assert rv.json["status"] in {"success", "partial"}
-    assert rv.json["respondent_name"] == "Maria"
-    assert rv.json["observation"] == "Tudo legível"
+    assert rv.json["status"] == "success"
+    assert rv.json["respondent_name"] is None
+    assert rv.json["observation"] is None
     assert rv.json["answers"][str(qid)] == "Sim"
 
 
@@ -347,15 +366,6 @@ def test_scan_analyze_reports_failed_when_no_data(client, app, monkeypatch):
         app_module,
         "process_scan_image",
         lambda image_path, test, with_confidence=False: ({}, {}),
-    )
-    monkeypatch.setattr(
-        app_module,
-        "extract_scan_metadata",
-        lambda image_path: {
-            "respondent_name": None,
-            "observation": None,
-            "method": "mock",
-        },
     )
 
     rv = client.post(
@@ -394,7 +404,80 @@ def test_process_scan_image_with_confidence_returns_tuple_on_unreadable_file():
     assert confidences == {}
 
 
-def test_scan_analyze_informs_pdf_renderer_missing(client, app, monkeypatch):
+def test_process_scan_image_blank_generated_pdf_returns_no_answers(app):
+    with app.app_context():
+        t = Test(title="Blank OMR")
+        _db.session.add(t)
+        _db.session.flush()
+
+        for order in range(10):
+            q = Question(text=f"Q{order + 1}", answer_type="likert")
+            _db.session.add(q)
+            _db.session.flush()
+            _db.session.add(TestQuestion(test_id=t.id, question_id=q.id, order=order))
+
+        _db.session.commit()
+        tid = t.id
+
+    with app.app_context():
+        test_obj = _db.session.get(Test, tid)
+
+        fd, pdf_path = tempfile.mkstemp(suffix=".pdf")
+        os.close(fd)
+        try:
+            generate_test_pdf(test_obj, pdf_path)
+            answers, confidences = process_scan_image(pdf_path, test_obj, with_confidence=True)
+        finally:
+            if os.path.exists(pdf_path):
+                os.remove(pdf_path)
+
+    assert answers == {}
+    assert confidences == {}
+
+
+def test_guide_row_detection_ignores_header_zone(app):
+    with app.app_context():
+        t = Test(title="Header Cutoff")
+        _db.session.add(t)
+        _db.session.flush()
+
+        for order in range(8):
+            q = Question(text=f"Q{order + 1}", answer_type="likert")
+            _db.session.add(q)
+            _db.session.flush()
+            _db.session.add(TestQuestion(test_id=t.id, question_id=q.id, order=order))
+
+        _db.session.commit()
+        tid = t.id
+
+    with app.app_context():
+        test_obj = _db.session.get(Test, tid)
+        fd, pdf_path = tempfile.mkstemp(suffix=".pdf")
+        os.close(fd)
+        try:
+            generate_test_pdf(test_obj, pdf_path)
+            page_img, _ = _read_scan_pages(pdf_path)[0]
+        finally:
+            if os.path.exists(pdf_path):
+                os.remove(pdf_path)
+
+    gray = cv2.cvtColor(page_img, cv2.COLOR_BGR2GRAY)
+    thresh = cv2.adaptiveThreshold(
+        cv2.GaussianBlur(gray, (5, 5), 0),
+        255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY_INV,
+        31,
+        8,
+    )
+    rows = _detect_answer_guide_rows(thresh, expected_rows=20)
+    min_y = _answer_region_min_y(gray.shape[0])
+
+    assert rows
+    assert all(row["y"] >= min_y for row in rows)
+
+
+def test_scan_analyze_returns_failed_for_empty_pdf_read(client, app, monkeypatch):
     with app.app_context():
         q = Question(text="Q Analyze PDF Renderer", answer_type="yes_no", correct_answer="Sim")
         _db.session.add(q)
@@ -411,15 +494,6 @@ def test_scan_analyze_informs_pdf_renderer_missing(client, app, monkeypatch):
         "process_scan_image",
         lambda image_path, test, with_confidence=False: ({}, {}),
     )
-    monkeypatch.setattr(
-        app_module,
-        "extract_scan_metadata",
-        lambda image_path: {
-            "respondent_name": None,
-            "observation": None,
-            "method": "pdf_renderer_unavailable",
-        },
-    )
 
     rv = client.post(
         f"/tests/{tid}/scans/analyze",
@@ -428,4 +502,4 @@ def test_scan_analyze_informs_pdf_renderer_missing(client, app, monkeypatch):
     )
     assert rv.status_code == 200
     assert rv.json["status"] == "failed"
-    assert "PDF recebido" in rv.json["message"]
+    assert "Não foi possível extrair" in rv.json["message"]

@@ -2,7 +2,12 @@
 import argparse
 import json
 import os
+import sys
 from dataclasses import dataclass
+
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
 
 from utils import process_scan_image
 

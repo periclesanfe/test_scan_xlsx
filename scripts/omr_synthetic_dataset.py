@@ -7,38 +7,37 @@ import random
 import cv2
 import numpy as np
 
+A4_WIDTH_PX = 1654
+A4_HEIGHT_PX = 2339
+QUESTION_COUNT = 5
+OPTION_COUNT = 5
+
+# Geometry tuned to the Hough-based fallback in utils.process_scan_image.
+START_Y = 460
+ROW_GAP = 220
+START_X = 220
+COL_GAP = 115
+BUBBLE_RADIUS = 16
+
 
 def draw_sheet(output_path, answers, rotate_deg=0.0, add_noise=False):
-    w, h = 1654, 2339
-    img = np.full((h, w, 3), 255, dtype=np.uint8)
+    img = np.full((A4_HEIGHT_PX, A4_WIDTH_PX, 3), 255, dtype=np.uint8)
 
-    # Fiducials (squares)
-    size = 24
-    for x, y in [(50, 50), (w - 50, 50), (50, h - 50), (w - 50, h - 50)]:
-        cv2.rectangle(img, (x - size // 2, y - size // 2), (x + size // 2, y + size // 2), (0, 0, 0), -1)
-
-    start_y = 300
-    row_gap = 180
-    start_x = 250
-    col_gap = 180
-    radius = 28
-
-    for q_index, option_index in enumerate(answers, start=1):
-        y = start_y + (q_index - 1) * row_gap
-        for opt_idx in range(5):
-            x = start_x + opt_idx * col_gap
-            cv2.circle(img, (x, y), radius, (0, 0, 0), 2)
+    for q_index, option_index in enumerate(answers):
+        y = START_Y + (q_index * ROW_GAP)
+        for opt_idx in range(OPTION_COUNT):
+            x = START_X + (opt_idx * COL_GAP)
+            cv2.circle(img, (x, y), BUBBLE_RADIUS, (0, 0, 0), 2)
             if opt_idx == option_index:
-                cv2.circle(img, (x, y), radius - 4, (0, 0, 0), -1)
+                cv2.circle(img, (x, y), BUBBLE_RADIUS - 3, (0, 0, 0), -1)
 
     if rotate_deg:
-        m = cv2.getRotationMatrix2D((w // 2, h // 2), rotate_deg, 1.0)
-        img = cv2.warpAffine(img, m, (w, h), borderValue=(255, 255, 255))
+        matrix = cv2.getRotationMatrix2D((A4_WIDTH_PX // 2, A4_HEIGHT_PX // 2), rotate_deg, 1.0)
+        img = cv2.warpAffine(img, matrix, (A4_WIDTH_PX, A4_HEIGHT_PX), borderValue=(255, 255, 255))
 
     if add_noise:
         noise = np.random.normal(0, 8, img.shape).astype(np.int16)
-        noisy = np.clip(img.astype(np.int16) + noise, 0, 255).astype(np.uint8)
-        img = noisy
+        img = np.clip(img.astype(np.int16) + noise, 0, 255).astype(np.uint8)
 
     cv2.imwrite(output_path, img)
 
@@ -46,7 +45,7 @@ def draw_sheet(output_path, answers, rotate_deg=0.0, add_noise=False):
 def main():
     parser = argparse.ArgumentParser(description="Generate synthetic OMR dataset")
     parser.add_argument("out_dir", help="Output directory")
-    parser.add_argument("--samples", type=int, default=12)
+    parser.add_argument("--samples", type=int, default=20)
     args = parser.parse_args()
 
     os.makedirs(args.out_dir, exist_ok=True)
@@ -55,29 +54,28 @@ def main():
 
     test_spec = {
         "questions": [
-            {"question_id": 1, "answer_type": "likert", "custom_options": ""},
-            {"question_id": 2, "answer_type": "likert", "custom_options": ""},
-            {"question_id": 3, "answer_type": "likert", "custom_options": ""},
-            {"question_id": 4, "answer_type": "likert", "custom_options": ""},
-            {"question_id": 5, "answer_type": "likert", "custom_options": ""},
+            {"question_id": i + 1, "answer_type": "likert", "custom_options": ""}
+            for i in range(QUESTION_COUNT)
         ]
     }
 
     samples = []
     for i in range(args.samples):
-        answers_idx = [random.randint(0, 4) for _ in range(5)]
+        answers_idx = [random.randint(0, OPTION_COUNT - 1) for _ in range(QUESTION_COUNT)]
         rotate_deg = random.choice([0.0, -2.0, 2.0, -4.0, 4.0])
-        add_noise = random.choice([False, True])
+        add_noise = random.random() < 0.4
 
         img_name = f"sample_{i:03d}.png"
         img_path = os.path.join(images_dir, img_name)
         draw_sheet(img_path, answers_idx, rotate_deg=rotate_deg, add_noise=add_noise)
 
-        expected = {str(j + 1): str(answers_idx[j] + 1) for j in range(5)}
-        samples.append({
-            "image_path": os.path.join("images", img_name),
-            "expected_answers": expected,
-        })
+        expected = {str(j + 1): str(answers_idx[j] + 1) for j in range(QUESTION_COUNT)}
+        samples.append(
+            {
+                "image_path": os.path.join("images", img_name),
+                "expected_answers": expected,
+            }
+        )
 
     dataset = {
         "test_spec": test_spec,
