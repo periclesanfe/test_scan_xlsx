@@ -25,7 +25,8 @@
           <td class="text-end">
             <a href="{{ url_for('scan_report', tid=test.id, sid=scan.id) }}" class="btn btn-sm btn-outline-info"><i class="bi bi-eye"></i> Ver</a>
             <form method="post" action="{{ url_for('scan_delete', tid=test.id, sid=scan.id) }}" class="d-inline" onsubmit="return confirm('Excluir este scan?')">
-              <button class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button class="btn btn-sm btn-outline-danger" aria-label="Excluir scan"><i class="bi bi-trash"></i></button>
             </form>
           </td>
         </tr>

@@ -1,5 +1,6 @@
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime
+from sqlalchemy import UniqueConstraint, Index
 
 db = SQLAlchemy()
 
@@ -29,12 +30,21 @@ class Test(db.Model):
     title = db.Column(db.String(200), nullable=False)
     description = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    questions = db.relationship("TestQuestion", backref="test", cascade="all, delete-orphan", order_by="TestQuestion.order")
+    questions = db.relationship(
+        "TestQuestion",
+        backref="test",
+        cascade="all, delete-orphan",
+        order_by="TestQuestion.order",
+    )
     scans = db.relationship("Scan", backref="test", cascade="all, delete-orphan")
 
 
 class TestQuestion(db.Model):
     __tablename__ = "test_questions"
+    __table_args__ = (
+        UniqueConstraint("test_id", "question_id", name="uq_test_question"),
+        Index("ix_test_questions_test_id", "test_id"),
+    )
     id = db.Column(db.Integer, primary_key=True)
     test_id = db.Column(db.Integer, db.ForeignKey("tests.id"), nullable=False)
     question_id = db.Column(db.Integer, db.ForeignKey("questions.id"), nullable=False)
@@ -53,23 +63,31 @@ class Scan(db.Model):
     responses = db.relationship("Response", backref="scan", cascade="all, delete-orphan")
 
     def calculate_score(self):
+        answer_key = {}
+        for tq in self.test.questions:
+            if tq.question.correct_answer:
+                answer_key[tq.question_id] = tq.question.correct_answer
+
         correct = 0
         total = 0
         for resp in self.responses:
-            tq = TestQuestion.query.filter_by(
-                test_id=self.test_id, question_id=resp.question_id
-            ).first()
-            if tq and tq.question.correct_answer:
+            expected = answer_key.get(resp.question_id)
+            if expected:
                 total += 1
-                if resp.answer == tq.question.correct_answer:
+                if resp.answer == expected:
                     correct += 1
         return correct, total
 
 
 class Response(db.Model):
     __tablename__ = "responses"
+    __table_args__ = (
+        UniqueConstraint("scan_id", "question_id", name="uq_scan_question_response"),
+        Index("ix_responses_scan_id", "scan_id"),
+    )
     id = db.Column(db.Integer, primary_key=True)
     scan_id = db.Column(db.Integer, db.ForeignKey("scans.id"), nullable=False)
     question_id = db.Column(db.Integer, db.ForeignKey("questions.id"), nullable=False)
     answer = db.Column(db.String(200), nullable=True)
+    omr_confidence = db.Column(db.Float, nullable=True)
     question = db.relationship("Question")

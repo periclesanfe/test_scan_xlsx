@@ -9,19 +9,20 @@
       </div>
       <div class="card-body">
         <form method="post" enctype="multipart/form-data">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
           <div class="row g-3 mb-4">
             <div class="col-md-6">
-              <label class="form-label fw-semibold">Nome do Respondente *</label>
-              <input type="text" class="form-control" name="respondent_name" required>
+              <label class="form-label fw-semibold" for="respondent_name">Nome do Respondente *</label>
+              <input id="respondent_name" type="text" class="form-control" name="respondent_name" autocomplete="name" required>
             </div>
             <div class="col-md-6">
-              <label class="form-label fw-semibold">Observação / Descrição</label>
-              <input type="text" class="form-control" name="observation">
+              <label class="form-label fw-semibold" for="observation">Observação / Descrição</label>
+              <input id="observation" type="text" class="form-control" name="observation">
             </div>
             <div class="col-12">
-              <label class="form-label fw-semibold">Foto / Scan da Prova <span class="text-muted small">(opcional – PNG, JPG, etc.)</span></label>
-              <input type="file" class="form-control" name="image" accept="image/*,.pdf">
+              <label class="form-label fw-semibold" for="scan_image">Foto / Scan da Prova <span class="text-muted small">(opcional – PNG, JPG, etc.)</span></label>
+              <input id="scan_image" type="file" class="form-control" name="image" accept="image/*,.pdf">
               <div class="form-text">Se enviada, o sistema tentará detectar automaticamente as marcações via OMR. Você pode também preencher manualmente abaixo.</div>
             </div>
           </div>

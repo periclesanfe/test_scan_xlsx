@@ -191,3 +191,99 @@ def test_export_xlsx(client, app):
     rv = client.get("/questions/export")
     assert rv.status_code == 200
     assert "spreadsheetml" in rv.content_type
+
+
+# ── Security / validation tests ──────────────────────────────────────────────
+
+def test_upload_path_traversal_blocked(client):
+    rv = client.get("/uploads/../app.py")
+    assert rv.status_code == 400
+
+
+def test_scan_report_blocks_cross_test_access(client, app):
+    with app.app_context():
+        q = Question(text="Q?", answer_type="yes_no", correct_answer="Sim")
+        _db.session.add(q)
+        _db.session.flush()
+
+        t1 = Test(title="T1")
+        t2 = Test(title="T2")
+        _db.session.add_all([t1, t2])
+        _db.session.flush()
+
+        _db.session.add(TestQuestion(test_id=t1.id, question_id=q.id, order=0))
+        _db.session.add(TestQuestion(test_id=t2.id, question_id=q.id, order=0))
+        _db.session.flush()
+
+        scan = Scan(test_id=t1.id, respondent_name="Pessoa")
+        _db.session.add(scan)
+        _db.session.commit()
+        t2_id, scan_id = t2.id, scan.id
+
+    rv = client.get(f"/tests/{t2_id}/scans/{scan_id}/report")
+    assert rv.status_code == 404
+
+
+def test_create_question_rejects_invalid_correct_answer(client):
+    rv = client.post("/questions/new", data={
+        "text": "Questão inválida",
+        "answer_type": "yes_no",
+        "correct_answer": "Talvez",
+    })
+    assert rv.status_code == 400
+    assert b"Resposta correta deve ser uma op" in rv.data
+
+
+def test_import_questions_json_payload(client):
+    rv = client.post("/questions/import.json", json={
+        "questions": [
+            {
+                "text": "Pergunta JSON?",
+                "answer_type": "yes_no",
+                "correct_answer": "Sim",
+                "custom_options": "",
+            }
+        ]
+    })
+    assert rv.status_code == 201
+    assert rv.json["created"] == 1
+
+
+def test_manifest_json_contains_template(client, app):
+    with app.app_context():
+        q = Question(text="Q Manifest", answer_type="yes_no", correct_answer="Sim")
+        _db.session.add(q)
+        _db.session.flush()
+        t = Test(title="Manifest Test")
+        _db.session.add(t)
+        _db.session.flush()
+        _db.session.add(TestQuestion(test_id=t.id, question_id=q.id, order=0))
+        _db.session.commit()
+        tid = t.id
+
+    rv = client.get(f"/tests/{tid}/manifest.json")
+    assert rv.status_code == 200
+    assert rv.json["template"]["template_version"] == "1.1"
+    assert rv.json["template"]["questions"][0]["question_id"] > 0
+
+
+def test_results_json_includes_confidence_key(client, app):
+    with app.app_context():
+        q = Question(text="Q Results", answer_type="yes_no", correct_answer="Sim")
+        _db.session.add(q)
+        _db.session.flush()
+        t = Test(title="Results Test")
+        _db.session.add(t)
+        _db.session.flush()
+        _db.session.add(TestQuestion(test_id=t.id, question_id=q.id, order=0))
+        _db.session.flush()
+        scan = Scan(test_id=t.id, respondent_name="Ana")
+        _db.session.add(scan)
+        _db.session.flush()
+        _db.session.add(Response(scan_id=scan.id, question_id=q.id, answer="Sim", omr_confidence=0.91))
+        _db.session.commit()
+        tid = t.id
+
+    rv = client.get(f"/tests/{tid}/results.json")
+    assert rv.status_code == 200
+    assert "omr_confidence" in rv.json["scans"][0]

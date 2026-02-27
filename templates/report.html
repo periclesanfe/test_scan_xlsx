@@ -41,17 +41,25 @@
         {% for r in scan.responses %}{% set _ = resp_map.update({r.question_id: r.answer}) %}{% endfor %}
         <table class="table table-bordered">
           <thead class="table-light">
-            <tr><th>#</th><th>Pergunta</th><th>Resposta Marcada</th><th>Correta</th><th>Resultado</th></tr>
+            <tr><th>#</th><th>Pergunta</th><th>Resposta Marcada</th><th>Correta</th><th>Confiança OMR</th><th>Resultado</th></tr>
           </thead>
           <tbody>
             {% for tq in test.questions %}
             {% set q = tq.question %}
             {% set ans = resp_map.get(q.id) %}
+            {% set resp = scan.responses|selectattr('question_id', 'equalto', q.id)|list|first %}
             <tr>
               <td>{{ loop.index }}</td>
               <td>{{ q.text }}</td>
               <td>{{ ans or '—' }}</td>
               <td>{{ q.correct_answer or '—' }}</td>
+              <td>
+                {% if resp and resp.omr_confidence is not none %}
+                  {{ "%.0f"|format(resp.omr_confidence * 100) }}%
+                {% else %}
+                  —
+                {% endif %}
+              </td>
               <td>
                 {% if not q.correct_answer %}
                   <span class="badge bg-secondary">Sem gabarito</span>

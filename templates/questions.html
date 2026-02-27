@@ -6,6 +6,7 @@
   <span>
     <a href="{{ url_for('questions_import') }}" class="btn btn-outline-secondary btn-sm"><i class="bi bi-upload"></i> Importar XLSX</a>
     <a href="{{ url_for('questions_export') }}" class="btn btn-outline-secondary btn-sm"><i class="bi bi-download"></i> Exportar XLSX</a>
+    <a href="{{ url_for('questions_export_json') }}" class="btn btn-outline-secondary btn-sm"><i class="bi bi-filetype-json"></i> Exportar JSON</a>
     <a href="{{ url_for('question_new') }}" class="btn btn-primary btn-sm"><i class="bi bi-plus"></i> Nova Pergunta</a>
   </span>
 </div>
@@ -38,9 +39,10 @@
           </td>
           <td>{{ q.correct_answer or '—' }}</td>
           <td class="text-end">
-            <a href="{{ url_for('question_edit', qid=q.id) }}" class="btn btn-sm btn-outline-secondary"><i class="bi bi-pencil"></i></a>
+            <a href="{{ url_for('question_edit', qid=q.id) }}" class="btn btn-sm btn-outline-secondary" aria-label="Editar pergunta"><i class="bi bi-pencil"></i></a>
             <form method="post" action="{{ url_for('question_delete', qid=q.id) }}" class="d-inline" onsubmit="return confirm('Excluir esta pergunta?')">
-              <button class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button class="btn btn-sm btn-outline-danger" aria-label="Excluir pergunta"><i class="bi bi-trash"></i></button>
             </form>
           </td>
         </tr>

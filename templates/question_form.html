@@ -9,12 +9,13 @@
       </div>
       <div class="card-body">
         <form method="post">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <div class="mb-3">
-            <label class="form-label fw-semibold">Texto da Pergunta *</label>
-            <textarea class="form-control" name="text" rows="3" required>{{ question.text if question else '' }}</textarea>
+            <label class="form-label fw-semibold" for="question_text">Texto da Pergunta *</label>
+            <textarea id="question_text" class="form-control" name="text" rows="3" required>{{ question.text if question else '' }}</textarea>
           </div>
           <div class="mb-3">
-            <label class="form-label fw-semibold">Tipo de Resposta *</label>
+            <label class="form-label fw-semibold" for="answer_type">Tipo de Resposta *</label>
             <select class="form-select" name="answer_type" id="answer_type" required>
               <option value="yes_no" {% if question and question.answer_type=='yes_no' %}selected{% endif %}>Sim / Não</option>
               <option value="likert" {% if question and question.answer_type=='likert' %}selected{% endif %}>Escala Likert (1–5)</option>
@@ -22,14 +23,14 @@
             </select>
           </div>
           <div class="mb-3" id="custom_options_group" style="display:none">
-            <label class="form-label fw-semibold">Opções Personalizadas (separadas por vírgula)</label>
-            <input type="text" class="form-control" name="custom_options"
+            <label class="form-label fw-semibold" for="custom_options">Opções Personalizadas (separadas por vírgula)</label>
+            <input id="custom_options" type="text" class="form-control" name="custom_options"
                    placeholder="ex: Ruim, Regular, Bom, Excelente"
                    value="{{ question.custom_options if question else '' }}">
           </div>
           <div class="mb-3">
-            <label class="form-label fw-semibold">Resposta Correta</label>
-            <input type="text" class="form-control" name="correct_answer"
+            <label class="form-label fw-semibold" for="correct_answer">Resposta Correta</label>
+            <input id="correct_answer" type="text" class="form-control" name="correct_answer"
                    placeholder="Deixe em branco se não houver resposta certa"
                    value="{{ question.correct_answer if question else '' }}">
             <div class="form-text">

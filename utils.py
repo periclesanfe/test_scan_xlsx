@@ -1,6 +1,5 @@
 import io
-import os
-import uuid
+import json
 
 import cv2
 import numpy as np
@@ -10,7 +9,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
-from reportlab.lib.enums import TA_CENTER, TA_LEFT
+from reportlab.lib.enums import TA_CENTER
 
 
 def generate_test_pdf(test, output_path):
@@ -39,7 +38,8 @@ def generate_test_pdf(test, output_path):
     elements.append(Spacer(1, 6 * mm))
 
     # Header table: Name + QR code
-    qr_img_buf = _make_qr(f"TEST:{test.id}")
+    template = build_omr_template(test)
+    qr_img_buf = _make_qr(f"OMR_TEMPLATE:{template['template_id']}")
     qr_rl = Image(qr_img_buf, width=25 * mm, height=25 * mm)
 
     header_data = [
@@ -76,7 +76,7 @@ def generate_test_pdf(test, output_path):
             elements.append(Paragraph("    " + "     ".join(option_row), option_style))
         elements.append(Spacer(1, 4 * mm))
 
-    doc.build(elements)
+    doc.build(elements, onFirstPage=lambda canvas, doc_ref: _draw_fiducials(canvas, doc_ref, template))
 
 
 def _make_qr(data: str) -> io.BytesIO:
@@ -95,7 +95,7 @@ def _make_qr(data: str) -> io.BytesIO:
 OMR_FILL_THRESHOLD = 0.4
 
 
-def process_scan_image(image_path, test):
+def process_scan_image(image_path, test, with_confidence=False):
     """
     Basic OMR: detect filled circles/bubbles in the uploaded scan.
     Returns a dict {question_index (1-based): selected_option_text}.
@@ -107,7 +107,17 @@ def process_scan_image(image_path, test):
 
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-    _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    # Adaptive threshold is more robust to uneven lighting than global Otsu alone.
+    thresh = cv2.adaptiveThreshold(
+        blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 31, 8
+    )
+    aligned = _align_with_fiducials(img)
+    if aligned is not None:
+        gray = cv2.cvtColor(aligned, cv2.COLOR_BGR2GRAY)
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        thresh = cv2.adaptiveThreshold(
+            blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 31, 8
+        )
 
     # Detect circles via HoughCircles
     circles = cv2.HoughCircles(
@@ -122,7 +132,7 @@ def process_scan_image(image_path, test):
     )
 
     if circles is None:
-        return {}
+        return ({}, {}) if with_confidence else {}
 
     circles = np.round(circles[0, :]).astype("int")
 
@@ -131,6 +141,7 @@ def process_scan_image(image_path, test):
 
     questions = test.questions
     results = {}
+    confidences = {}
     circle_idx = 0
     for tq in questions:
         q = tq.question
@@ -152,8 +163,8 @@ def process_scan_image(image_path, test):
                 best = options[i]
         if best:
             results[tq.question_id] = best
-
-    return results
+            confidences[tq.question_id] = round(float(best_fill), 4)
+    return (results, confidences) if with_confidence else results
 
 
 def import_questions_from_xlsx(file_path):
@@ -165,7 +176,10 @@ def import_questions_from_xlsx(file_path):
     import openpyxl
     wb = openpyxl.load_workbook(file_path)
     ws = wb.active
-    headers = [str(cell.value).strip().lower() if cell.value else "" for cell in next(ws.iter_rows(min_row=1, max_row=1))]
+    headers = [
+        str(cell.value).strip().lower() if cell.value else ""
+        for cell in next(ws.iter_rows(min_row=1, max_row=1))
+    ]
     questions = []
     for row in ws.iter_rows(min_row=2, values_only=True):
         if not any(row):
@@ -190,6 +204,44 @@ def import_questions_from_xlsx(file_path):
     return questions
 
 
+def import_questions_from_json(file_obj_or_path):
+    """
+    Import questions from JSON payload/file.
+    Accepted payload:
+    {
+      "questions": [
+        {
+          "text": "...",
+          "answer_type": "yes_no|likert|custom",
+          "correct_answer": "...",
+          "custom_options": "A, B, C"
+        }
+      ]
+    }
+    """
+    if isinstance(file_obj_or_path, str):
+        with open(file_obj_or_path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+    else:
+        raw = file_obj_or_path.read()
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8")
+        payload = json.loads(raw)
+
+    rows = payload.get("questions", [])
+    questions = []
+    for row in rows:
+        q = {
+            "text": str(row.get("text") or row.get("pergunta") or "").strip(),
+            "answer_type": str(row.get("answer_type") or row.get("tipo") or "yes_no").strip().lower(),
+            "correct_answer": str(row.get("correct_answer") or row.get("resposta_correta") or "").strip(),
+            "custom_options": str(row.get("custom_options") or row.get("opcoes") or "").strip(),
+        }
+        if q["text"]:
+            questions.append(q)
+    return questions
+
+
 def export_questions_to_xlsx(questions):
     """Return BytesIO with questions exported to xlsx."""
     import openpyxl
@@ -204,3 +256,81 @@ def export_questions_to_xlsx(questions):
     wb.save(buf)
     buf.seek(0)
     return buf
+
+
+def build_omr_template(test):
+    """Build a versioned OMR template metadata descriptor for the test."""
+    questions = []
+    for order, tq in enumerate(test.questions, start=1):
+        q = tq.question
+        questions.append(
+            {
+                "order": order,
+                "question_id": q.id,
+                "answer_type": q.answer_type,
+                "options": q.get_options(),
+                "option_count": len(q.get_options()),
+            }
+        )
+    return {
+        "template_version": "1.1",
+        "template_id": f"test-{test.id}-v1_1",
+        "fiducials": [
+            {"name": "tl", "x_norm": 0.03, "y_norm": 0.03},
+            {"name": "tr", "x_norm": 0.97, "y_norm": 0.03},
+            {"name": "bl", "x_norm": 0.03, "y_norm": 0.97},
+            {"name": "br", "x_norm": 0.97, "y_norm": 0.97},
+        ],
+        "questions": questions,
+    }
+
+
+def _draw_fiducials(canvas, doc_ref, template):
+    width, height = A4
+    size = 5 * mm
+    for fid in template["fiducials"]:
+        x = fid["x_norm"] * width
+        y = fid["y_norm"] * height
+        canvas.setFillColorRGB(0, 0, 0)
+        canvas.rect(x - (size / 2), y - (size / 2), size, size, stroke=0, fill=1)
+
+
+def _align_with_fiducials(img):
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    thresh = cv2.adaptiveThreshold(
+        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 31, 8
+    )
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    squares = []
+    for c in contours:
+        area = cv2.contourArea(c)
+        if area < 80:
+            continue
+        peri = cv2.arcLength(c, True)
+        approx = cv2.approxPolyDP(c, 0.08 * peri, True)
+        if len(approx) == 4:
+            x, y, w, h = cv2.boundingRect(approx)
+            ratio = w / float(h) if h else 0
+            if 0.6 <= ratio <= 1.4:
+                squares.append((area, x, y, w, h))
+
+    if len(squares) < 4:
+        return None
+    squares = sorted(squares, key=lambda s: s[0], reverse=True)[:8]
+    centers = np.array([[x + w / 2.0, y + h / 2.0] for _, x, y, w, h in squares], dtype=np.float32)
+    if centers.shape[0] < 4:
+        return None
+
+    s = centers.sum(axis=1)
+    diff = np.diff(centers, axis=1).reshape(-1)
+    tl = centers[np.argmin(s)]
+    br = centers[np.argmax(s)]
+    tr = centers[np.argmin(diff)]
+    bl = centers[np.argmax(diff)]
+
+    src = np.array([tl, tr, br, bl], dtype=np.float32)
+    out_w, out_h = 1654, 2339  # ~A4 @ 150 DPI
+    dst = np.array([[0, 0], [out_w - 1, 0], [out_w - 1, out_h - 1], [0, out_h - 1]], dtype=np.float32)
+    m = cv2.getPerspectiveTransform(src, dst)
+    return cv2.warpPerspective(img, m, (out_w, out_h))

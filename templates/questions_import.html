@@ -17,6 +17,7 @@
           </tbody>
         </table>
         <form method="post" enctype="multipart/form-data">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <div class="mb-3">
             <input type="file" class="form-control" name="file" accept=".xlsx,.xls" required>
           </div>

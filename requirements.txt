@@ -1,5 +1,6 @@
 Flask==3.1.0
 Flask-SQLAlchemy==3.1.1
+Flask-WTF==1.2.2
 openpyxl==3.1.5
 reportlab==4.2.5
 opencv-python-headless==4.10.0.84
@@ -7,3 +8,4 @@ numpy==2.0.2
 Pillow==12.1.1
 qrcode==8.0
 pandas==2.2.3
+pytest==8.4.2

@@ -1,4 +1,5 @@
 __pycache__/
+.pytest_cache/
 *.py[cod]
 *.db
 *.sqlite3
@@ -10,4 +11,5 @@ venv/
 dist/
 build/
 *.egg-info/
+.DS_Store
 nohup.out

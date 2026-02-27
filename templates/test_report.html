@@ -19,7 +19,6 @@
   <div class="col-md-4">
     <div class="card text-center">
       <div class="card-body">
-        {% set avg = (report_data|selectattr('total','gt',0)|map(attribute='correct')|sum) / (report_data|selectattr('total','gt',0)|list|length) if report_data|selectattr('total','gt',0)|list|length > 0 else 0 %}
         <div class="fs-1 fw-bold text-success">
           {% set totals = report_data|selectattr('total','gt',0)|list %}
           {% if totals %}
