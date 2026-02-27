@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Editar' if test else 'Nova' }} Prova – QuizScan{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-lg-9">
+    <div class="card">
+      <div class="card-header bg-white fw-semibold">
+        <i class="bi bi-file-earmark-text"></i> {{ 'Editar Prova' if test else 'Nova Prova' }}
+      </div>
+      <div class="card-body">
+        <form method="post" id="testForm">
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Título *</label>
+            <input type="text" class="form-control" name="title" required value="{{ test.title if test else '' }}">
+          </div>
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Descrição / Instruções</label>
+            <textarea class="form-control" name="description" rows="2">{{ test.description if test else '' }}</textarea>
+          </div>
+
+          <label class="form-label fw-semibold">Perguntas</label>
+          <p class="text-muted small mb-2">Marque as perguntas para incluir e arraste para reordenar.</p>
+
+          <div id="question-pool" class="border rounded p-2 mb-3" style="max-height:400px;overflow-y:auto">
+            {% for q in questions %}
+            <div class="d-flex align-items-center gap-2 p-2 border-bottom question-item" data-id="{{ q.id }}">
+              <input type="checkbox" class="form-check-input q-check" value="{{ q.id }}"
+                {% if test and q in test.questions|map(attribute='question')|list %}checked{% endif %}>
+              <span class="badge
+                {% if q.answer_type=='yes_no' %}bg-success
+                {% elif q.answer_type=='likert' %}bg-primary
+                {% else %}bg-purple{% endif %}"
+                style="{% if q.answer_type=='custom' %}background:#6f42c1{% endif %}">
+                {{ {'yes_no':'Sim/Não','likert':'Likert','custom':'Custom'}[q.answer_type] }}
+              </span>
+              <span class="flex-grow-1">{{ q.text }}</span>
+              <i class="bi bi-grip-vertical text-muted" style="cursor:grab"></i>
+            </div>
+            {% else %}
+            <p class="text-muted p-2 mb-0">Nenhuma pergunta cadastrada ainda.</p>
+            {% endfor %}
+          </div>
+
+          <!-- hidden inputs populated by JS -->
+          <div id="hidden-inputs"></div>
+
+          <div class="d-flex gap-2">
+            <button type="submit" class="btn btn-success">{{ 'Salvar Alterações' if test else 'Criar Prova' }}</button>
+            <a href="{{ url_for('tests_list') }}" class="btn btn-outline-secondary">Cancelar</a>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+<script>
+const pool = document.getElementById('question-pool');
+const hiddenDiv = document.getElementById('hidden-inputs');
+
+new Sortable(pool, { animation: 150, handle: '.bi-grip-vertical' });
+
+document.getElementById('testForm').addEventListener('submit', function() {
+  hiddenDiv.innerHTML = '';
+  pool.querySelectorAll('.question-item').forEach(function(item) {
+    const cb = item.querySelector('.q-check');
+    if (cb && cb.checked) {
+      const inp = document.createElement('input');
+      inp.type = 'hidden';
+      inp.name = 'question_ids';
+      inp.value = item.dataset.id;
+      hiddenDiv.appendChild(inp);
+    }
+  });
+});
+</script>
+{% endblock %}

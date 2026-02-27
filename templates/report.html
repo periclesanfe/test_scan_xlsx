@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Relatório – {{ scan.respondent_name }}{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-lg-9">
+    <div class="card mb-4">
+      <div class="card-header bg-white fw-semibold d-flex justify-content-between">
+        <span><i class="bi bi-person-check"></i> Relatório Individual – {{ scan.respondent_name }}</span>
+        <a href="{{ url_for('scans_list', tid=test.id) }}" class="btn btn-sm btn-outline-secondary">← Voltar</a>
+      </div>
+      <div class="card-body">
+        <div class="row g-3 mb-3">
+          <div class="col-md-4">
+            <div class="p-3 border rounded text-center">
+              <div class="fs-1 fw-bold text-primary">
+                {% if total > 0 %}{{ "%.0f"|format(correct/total*100) }}%{% else %}—{% endif %}
+              </div>
+              <div class="text-muted small">Nota</div>
+            </div>
+          </div>
+          <div class="col-md-4">
+            <div class="p-3 border rounded text-center">
+              <div class="fs-1 fw-bold text-success">{{ correct }}</div>
+              <div class="text-muted small">Acertos</div>
+            </div>
+          </div>
+          <div class="col-md-4">
+            <div class="p-3 border rounded text-center">
+              <div class="fs-1 fw-bold text-secondary">{{ total }}</div>
+              <div class="text-muted small">Total Avaliadas</div>
+            </div>
+          </div>
+        </div>
+
+        {% if scan.observation %}
+        <p class="text-muted mb-3"><strong>Observação:</strong> {{ scan.observation }}</p>
+        {% endif %}
+
+        <h6 class="fw-semibold mb-3">Detalhes das Respostas</h6>
+        {% set resp_map = {} %}
+        {% for r in scan.responses %}{% set _ = resp_map.update({r.question_id: r.answer}) %}{% endfor %}
+        <table class="table table-bordered">
+          <thead class="table-light">
+            <tr><th>#</th><th>Pergunta</th><th>Resposta Marcada</th><th>Correta</th><th>Resultado</th></tr>
+          </thead>
+          <tbody>
+            {% for tq in test.questions %}
+            {% set q = tq.question %}
+            {% set ans = resp_map.get(q.id) %}
+            <tr>
+              <td>{{ loop.index }}</td>
+              <td>{{ q.text }}</td>
+              <td>{{ ans or '—' }}</td>
+              <td>{{ q.correct_answer or '—' }}</td>
+              <td>
+                {% if not q.correct_answer %}
+                  <span class="badge bg-secondary">Sem gabarito</span>
+                {% elif ans == q.correct_answer %}
+                  <span class="badge bg-success"><i class="bi bi-check"></i> Correto</span>
+                {% elif ans %}
+                  <span class="badge bg-danger"><i class="bi bi-x"></i> Errado</span>
+                {% else %}
+                  <span class="badge bg-warning text-dark">Sem resposta</span>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+
+        {% if scan.image_filename %}
+        <hr>
+        <h6 class="fw-semibold">Imagem Enviada</h6>
+        <img src="{{ url_for('uploaded_file', filename=scan.image_filename) }}" class="img-fluid border rounded" style="max-height:400px" alt="scan">
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
